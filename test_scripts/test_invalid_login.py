@@ -16,5 +16,5 @@ class Test_InvalidLogin(BaseTest):
         login_page.click_go_button()
         # 4. verify that error message is displayed
         result=login_page.verify_errmsg_is_displayed()
-        # assert result
-        assert False
+        assert result
+        # assert False
