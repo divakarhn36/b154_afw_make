@@ -2,6 +2,8 @@ name: Run Tests At Push
 
 on: [push]
 
+permissions:
+  contents: write
 
 jobs:
   test:
@@ -33,30 +35,59 @@ jobs:
       - run: playwright install chromium --with-deps
 
       - name: Run tests
-        run: pytest --alluredir=allure-results
+        run: pytest --alluredir=allure-results --junitxml=junit.xml
         continue-on-error: true
 
       - name: Generate Allure report
         if: always()
         run: allure generate allure-results --clean -o allure-report
 
-      - name: Upload Allure report as artifact
+      - name: Deploy Allure report to GitHub Pages
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          name: allure-report
-          path: allure-report/
-          if-no-files-found: warn
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./allure-report
 
-      - name: Upload raw Allure results as artifact
+      - name: Extract test summary
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: allure-results
-          path: allure-results/
-          if-no-files-found: warn
+        run: |
+          python - <<'EOF' >> "$GITHUB_ENV"
+          import os, glob, xml.etree.ElementTree as ET
+          total = failed = errors = skipped = 0
+          for f in glob.glob("junit.xml") + glob.glob("**/junit.xml", recursive=True):
+              for ts in ET.parse(f).iter("testsuite"):
+                  total   += int(ts.attrib.get("tests", 0))
+                  failed  += int(ts.attrib.get("failures", 0))
+                  errors  += int(ts.attrib.get("errors", 0))
+                  skipped += int(ts.attrib.get("skipped", 0))
+          passed = total - failed - errors - skipped
+          print(f"TOTAL={total}")
+          print(f"PASSED={passed}")
+          print(f"FAILED={failed + errors}")
+          print(f"SKIPPED={skipped}")
+          print(f"STATUS={'FAILED' if (failed + errors) > 0 else 'PASSED'}")
+          EOF
 
-      - name: Upload raw videos as artifact
+      - name: Send results to Make.com
+        if: always()
+        run: |
+          curl -X POST "${{ secrets.MAKE_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"status\":  \"$STATUS\",
+              \"total\":   \"$TOTAL\",
+              \"passed\":  \"$PASSED\",
+              \"failed\":  \"$FAILED\",
+              \"skipped\": \"$SKIPPED\",
+              \"repo\":    \"${{ github.repository }}\",
+              \"branch\":  \"${{ github.ref_name }}\",
+              \"commit\":  \"${{ github.sha }}\",
+              \"run_url\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\",
+              \"report_link\": \"https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/\"
+            }"
+
+      - name: Upload videos as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
